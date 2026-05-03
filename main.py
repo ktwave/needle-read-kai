@@ -65,11 +65,11 @@ class NeedleReaderKai:
         self.paste_gen7_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             control_frame,
-            text="停止時に Gen7 Main RNG Tool へペースト",
+            text="停止時に Gen7 の針リスト (Clock_List) へ出力",
             variable=self.paste_gen7_var,
         ).pack(side=tk.LEFT, padx=10)
 
-        self.status_label = ttk.Label(control_frame, text="停止中")
+        self.status_label = ttk.Label(control_frame, text="ステータス: 停止中")
         self.status_label.pack(side=tk.RIGHT, padx=5)
 
         # 結果表示フレーム
@@ -109,7 +109,7 @@ class NeedleReaderKai:
         self.monitoring = True
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
-        self.status_label.config(text="監視中")
+        self.status_label.config(text="ステータス: 監視中")
         self.clear_results()
         self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
         self.monitor_thread.start()
@@ -118,7 +118,7 @@ class NeedleReaderKai:
         self.monitoring = False
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
-        self.status_label.config(text="停止中")
+        self.status_label.config(text="ステータス: 停止中")
         if self.paste_gen7_var.get():
             if not self.paste_to_gen7_tool():
                 self.copy_results()
@@ -226,19 +226,76 @@ class NeedleReaderKai:
                 return w
         return None
 
+    @staticmethod
+    def _hwnd_int(win):
+        h = getattr(win, "_hWnd", None)
+        if h is None:
+            return None
+        try:
+            return int(h)
+        except (TypeError, ValueError):
+            try:
+                return int(h.value)  # ctypes
+            except Exception:
+                return None
+
+    def _gen7_find_clock_list_uia(self, hwnd):
+        """UI Automation で Name / AutomationId が Clock_List の編集コントロールを返す"""
+        from pywinauto import Desktop
+
+        root = Desktop(backend="uia").window(handle=hwnd)
+        root.wait("exists", timeout=5)
+        candidates = (
+            dict(auto_id="Clock_List", control_type="Edit"),
+            dict(title="Clock_List", control_type="Edit"),
+            dict(auto_id="Clock_List"),
+            dict(title="Clock_List"),
+        )
+        last_err = None
+        for kw in candidates:
+            try:
+                ctrl = root.child_window(**kw)
+                ctrl.wait("exists", timeout=2)
+                return ctrl.wrapper_object()
+            except Exception as e:
+                last_err = e
+                continue
+        if last_err:
+            print(f"[Gen7 UIA] Clock_List が見つかりません: {last_err}")
+        return None
+
+    def _gen7_set_clock_list_text(self, win, text):
+        """針リストを空にしてから出力文字列を設定（フォーカス不要）"""
+        hwnd = self._hwnd_int(win)
+        if not hwnd:
+            print("[Gen7 UIA] HWND を取得できませんでした")
+            return False
+        try:
+            wrap = self._gen7_find_clock_list_uia(hwnd)
+            if wrap is None:
+                return False
+            if hasattr(wrap, "set_edit_text"):
+                wrap.set_edit_text("")
+                wrap.set_edit_text(text)
+            elif hasattr(wrap, "set_value"):
+                wrap.set_value("")
+                wrap.set_value(text)
+            else:
+                print("[Gen7 UIA] set_edit_text / set_value が使えません")
+                return False
+            return True
+        except Exception as e:
+            print(f"[Gen7 UIA] 書き込み失敗: {e}")
+            return False
+
     def paste_to_gen7_tool(self):
-        """クリップボードにコピーしたうえで、Gen7 ツールを前面化して Ctrl+V"""
+        """クリップボードへコピーし、Gen7 の Clock_List に UIA で直接反映する"""
         self.copy_results()
+        text = ",".join(map(str, self.detected_values))
         win = self._find_gen7_window()
         if not win:
             return False
-        try:
-            win.activate()
-            time.sleep(0.15)
-            pyautogui.hotkey("ctrl", "v")
-            return True
-        except Exception:
-            return False
+        return self._gen7_set_clock_list_text(win, text)
 
     def monitor_loop(self):
         while self.monitoring:
