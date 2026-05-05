@@ -20,21 +20,41 @@ CONFIG_PATH = os.path.join(BASE_DIR, "app_config.json")
 class NeedleReaderKai:
     MATCH_THRESHOLD = 0.85
     QR_MATCH_THRESHOLD = 0.85
+    QR_TRIGGER_THRESHOLD = 0.70
     DEBUG_PREVIEW_RCLICK_SAVE = True
     PREVIEW_COLS = 5
     PREVIEW_ROWS = 2
     PREVIEW_CELL_PX = 60
+    TITLE_CAPTURE_X = 165
+    TITLE_CAPTURE_Y = 205
+    TITLE_CAPTURE_W = 64
+    TITLE_CAPTURE_H = 64
+    QR_CAPTURE_OFFSET_X = 521
+    QR_CAPTURE_OFFSET_Y = 380
+    QR_CAPTURE_W = 28
+    QR_CAPTURE_H = 28
+    QR_MSG_CAPTURE_X = 100
+    QR_MSG_CAPTURE_Y = 537
+    QR_MSG_CAPTURE_W = 178
+    QR_MSG_CAPTURE_H = 34
+    WINDOW_WIDTH = 560
+    WINDOW_HEIGHT = 285
 
     def __init__(self, root):
         self.root = root
         self.root.title(f"Needle Reader -改- v{VERSION}")
-        self.root.geometry("560x310")
-        self.root.minsize(560, 310)
+        self.root.geometry(f"{self.WINDOW_WIDTH}x{self.WINDOW_HEIGHT}")
+        self.root.maxsize(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
+        self.root.minsize(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
+        
 
         self.monitoring = False
         self.detected_values = []
         self.title_templates = {}
         self.qr_templates = {}
+        self.qr_ready_template = None
+        self.qr_locked_template = None
+        self.qr_state = "ready"
         self.last_detection_time = 0
         self.interval = 1.0
         self.mode_var = tk.StringVar(value="title")
@@ -71,10 +91,20 @@ class NeedleReaderKai:
         qr_dir = os.path.join(BASE_DIR, "resources", "images", "qr")
         self.title_templates = self._load_template_group(title_dir)
         self.qr_templates = self._load_template_group(qr_dir)
+        ready_path = os.path.join(qr_dir, "qr_ready.png")
+        locked_path = os.path.join(qr_dir, "qr_locked.png")
+        if os.path.exists(ready_path):
+            self.qr_ready_template = cv2.imread(ready_path, cv2.IMREAD_GRAYSCALE)
+        if os.path.exists(locked_path):
+            self.qr_locked_template = cv2.imread(locked_path, cv2.IMREAD_GRAYSCALE)
         if not self.title_templates:
             messagebox.showwarning("Warning", f"タイトル画像が見つかりません: {title_dir}")
         if not self.qr_templates:
             messagebox.showwarning("Warning", f"QR画像が見つかりません: {qr_dir}")
+        if self.qr_ready_template is None:
+            messagebox.showwarning("Warning", f"QRトリガー画像が見つかりません: {ready_path}")
+        if self.qr_locked_template is None:
+            messagebox.showwarning("Warning", f"QRトリガー画像が見つかりません: {locked_path}")
 
     def load_config(self):
         if not os.path.exists(CONFIG_PATH):
@@ -119,39 +149,9 @@ class NeedleReaderKai:
         outer = ttk.Frame(self.root, padding=6)
         outer.pack(fill=tk.BOTH, expand=True)
 
-        row1 = ttk.Frame(outer)
-        row1.pack(fill=tk.X, pady=(0, 2))
-        b_kw = {"style": compact} if compact else {}
-        self.start_btn = ttk.Button(row1, text="監視開始", command=self.start_monitoring, **b_kw)
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 4))
-        self.stop_btn = ttk.Button(
-            row1, text="監視停止", command=self.stop_monitoring, state=tk.DISABLED, **b_kw
-        )
-        self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
-        self.status_label = ttk.Label(row1, text="ステータス: 停止中")
-        self.status_label.pack(side=tk.RIGHT)
-
-        row2 = ttk.Frame(outer)
-        row2.pack(fill=tk.X, pady=(0, 4))
-        self.title_link_chk = ttk.Checkbutton(
-            row2,
-            text="停止時にGen7 Main RNG Toolへ連携",
-            variable=self.paste_gen7_var,
-            command=self._on_mode_option_changed,
-        )
-        self.title_link_chk.pack(side=tk.LEFT)
-        self.qr_output_btn = ttk.Button(row2, text="出力", command=self.output_qr_to_gen7, **b_kw)
-        interval_box = ttk.Frame(row2)
-        interval_box.pack(side=tk.RIGHT)
-        ttk.Label(interval_box, text="検知インターバル(秒)").pack(side=tk.LEFT, padx=(0, 4))
-        self.interval_entry = ttk.Entry(interval_box, width=6, textvariable=self.interval_var)
-        self.interval_entry.pack(side=tk.LEFT)
-        self.interval_entry.bind("<FocusOut>", lambda _e: self._apply_interval_from_ui(show_error=False))
-        self.interval_entry.bind("<Return>", lambda _e: self._apply_interval_from_ui(show_error=True))
-
-        row3 = ttk.Frame(outer)
-        row3.pack(fill=tk.X, pady=(0, 4))
-        mode_box = ttk.LabelFrame(row3, text="モード", padding=4)
+        row0 = ttk.Frame(outer)
+        row0.pack(fill=tk.X, pady=(0, 2))
+        mode_box = ttk.LabelFrame(row0, text="モード", padding=4)
         mode_box.pack(side=tk.LEFT)
         self.mode_title_rb = ttk.Radiobutton(
             mode_box, text="タイトル", value="title", variable=self.mode_var, command=self.on_mode_changed
@@ -161,6 +161,32 @@ class NeedleReaderKai:
             mode_box, text="QR", value="qr", variable=self.mode_var, command=self.on_mode_changed
         )
         self.mode_qr_rb.pack(side=tk.LEFT)
+
+        row1 = ttk.Frame(outer)
+        row1.pack(fill=tk.X, pady=(0, 4))
+        b_kw = {"style": compact} if compact else {}
+        self.start_btn = ttk.Button(row1, text="監視開始", command=self.start_monitoring, **b_kw)
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self.stop_btn = ttk.Button(
+            row1, text="監視停止", command=self.stop_monitoring, state=tk.DISABLED, **b_kw
+        )
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self.title_link_chk = ttk.Checkbutton(
+            row1,
+            text="停止時にGen7 Main RNG Toolへ連携",
+            variable=self.paste_gen7_var,
+            command=self._on_mode_option_changed,
+        )
+        self.title_link_chk.pack(side=tk.LEFT)
+        self.qr_output_btn = ttk.Button(row1, text="出力", command=self.output_qr_to_gen7, **b_kw)
+        self.interval_box = ttk.Frame(row1)
+        self.interval_box.pack(side=tk.RIGHT)
+        self.interval_label = ttk.Label(self.interval_box, text="検知インターバル(秒)")
+        self.interval_label.pack(side=tk.LEFT, padx=(0, 4))
+        self.interval_entry = ttk.Entry(self.interval_box, width=6, textvariable=self.interval_var)
+        self.interval_entry.pack(side=tk.LEFT)
+        self.interval_entry.bind("<FocusOut>", lambda _e: self._apply_interval_from_ui(show_error=False))
+        self.interval_entry.bind("<Return>", lambda _e: self._apply_interval_from_ui(show_error=True))
 
         results_frame = ttk.Frame(outer)
         results_frame.pack(fill=tk.X, expand=False, pady=(0, 2))
@@ -204,6 +230,8 @@ class NeedleReaderKai:
         ttk.Button(action_frame, text="出力結果クリア", command=self.clear_results, **b_kw).pack(
             side=tk.LEFT
         )
+        self.status_label = ttk.Label(action_frame, text="ステータス: 停止中")
+        self.status_label.pack(side=tk.RIGHT)
         self._apply_mode_visibility()
 
     def get_active_props(self):
@@ -211,18 +239,23 @@ class NeedleReaderKai:
 
     def apply_mode_to_ui(self):
         props = self.get_active_props()
-        self.interval = float(props["interval"])
-        self.interval_var.set(f"{self.interval:g}")
+        if self.mode_var.get() == "title":
+            self.interval = float(props["interval"])
+            self.interval_var.set(f"{self.interval:g}")
+        else:
+            self.interval_var.set("")
         self.paste_gen7_var.set(bool(props["paste_gen7"]))
 
     def _persist_active_props_from_ui(self):
         props = self.get_active_props()
-        props["interval"] = float(self.interval)
+        if self.mode_var.get() == "title":
+            props["interval"] = float(self.interval)
         props["paste_gen7"] = bool(self.paste_gen7_var.get())
         self.save_config()
 
     def on_mode_changed(self):
         self.apply_mode_to_ui()
+        self.qr_state = "ready"
         self._apply_mode_visibility()
         self.save_config()
 
@@ -236,11 +269,15 @@ class NeedleReaderKai:
                 self.title_link_chk.pack(side=tk.LEFT)
             if self.qr_output_btn.winfo_ismapped():
                 self.qr_output_btn.pack_forget()
+            if not self.interval_box.winfo_ismapped():
+                self.interval_box.pack(side=tk.RIGHT)
         else:
             if self.title_link_chk.winfo_ismapped():
                 self.title_link_chk.pack_forget()
             if not self.qr_output_btn.winfo_ismapped():
                 self.qr_output_btn.pack(side=tk.LEFT)
+            if self.interval_box.winfo_ismapped():
+                self.interval_box.pack_forget()
 
     def _sync_log_height_to_preview(self):
         line_px = max(10, self.log_font.metrics("linespace"))
@@ -259,9 +296,11 @@ class NeedleReaderKai:
             pass
 
     def start_monitoring(self):
-        if not self._apply_interval_from_ui(show_error=True):
-            return
+        if self.mode_var.get() == "title":
+            if not self._apply_interval_from_ui(show_error=True):
+                return
         self.monitoring = True
+        self.qr_state = "ready"
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         self.mode_title_rb.config(state=tk.DISABLED)
@@ -294,6 +333,7 @@ class NeedleReaderKai:
 
     def stop_monitoring(self):
         self.monitoring = False
+        self.qr_state = "ready"
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         self.mode_title_rb.config(state=tk.NORMAL)
@@ -382,6 +422,20 @@ class NeedleReaderKai:
             scores.append((name, float(max_val)))
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores
+
+    def _match_single_template(self, frame, template):
+        if template is None:
+            return -1.0
+        fh, fw = frame.shape[:2]
+        th, tw = template.shape[:2]
+        if th > fh or tw > fw:
+            return -1.0
+        try:
+            res = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
+            return float(max_val)
+        except cv2.error:
+            return -1.0
 
     def copy_results(self):
         text = ",".join(map(str, self.detected_values))
@@ -532,6 +586,20 @@ class NeedleReaderKai:
         if not self._gen7_output_sequence(win, text):
             messagebox.showwarning("出力失敗", "針リストへの出力に失敗しました。")
 
+    def _capture_qr_region_from_window(self, target_window):
+        left, top = target_window.left, target_window.top
+        title_x = left + self.TITLE_CAPTURE_X
+        title_y = top + self.TITLE_CAPTURE_Y
+        qr_x = title_x + self.QR_CAPTURE_OFFSET_X
+        qr_y = title_y + self.QR_CAPTURE_OFFSET_Y
+        return pyautogui.screenshot(region=(qr_x, qr_y, self.QR_CAPTURE_W, self.QR_CAPTURE_H))
+
+    def _capture_qr_message_region_from_window(self, target_window):
+        left, top = target_window.left, target_window.top
+        msg_x = left + self.QR_MSG_CAPTURE_X
+        msg_y = top + self.QR_MSG_CAPTURE_Y
+        return pyautogui.screenshot(region=(msg_x, msg_y, self.QR_MSG_CAPTURE_W, self.QR_MSG_CAPTURE_H))
+
     def monitor_loop(self):
         while self.monitoring:
             windows = self._find_target_windows()
@@ -545,19 +613,20 @@ class NeedleReaderKai:
                 time.sleep(1)
                 continue
 
-            left, top = target_window.left, target_window.top
-            title_x = left + 165
-            title_y = top + 205
             mode = self.mode_var.get()
 
             try:
                 if mode == "qr":
-                    qr_x = title_x + 521
-                    qr_y = title_y + 380
-                    screenshot = pyautogui.screenshot(region=(qr_x, qr_y, 28, 28))
+                    msg_shot = self._capture_qr_message_region_from_window(target_window)
+                    msg_frame = cv2.cvtColor(np.array(msg_shot), cv2.COLOR_RGB2GRAY)
                 else:
-                    screenshot = pyautogui.screenshot(region=(title_x, title_y, 64, 64))
-                frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+                    left, top = target_window.left, target_window.top
+                    title_x = left + self.TITLE_CAPTURE_X
+                    title_y = top + self.TITLE_CAPTURE_Y
+                    screenshot = pyautogui.screenshot(
+                        region=(title_x, title_y, self.TITLE_CAPTURE_W, self.TITLE_CAPTURE_H)
+                    )
+                    frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
             except Exception as e:
                 print(f"[capture error] {e}")
                 time.sleep(1)
@@ -567,15 +636,30 @@ class NeedleReaderKai:
             dt_since_last = current_time - self.last_detection_time
 
             if mode == "qr":
-                if dt_since_last > self.interval:
-                    scores = self._score_all_templates(frame, self.qr_templates)
-                    best_match = scores[0][0] if scores else None
-                    best_val = scores[0][1] if scores else -1.0
-                    if best_match and best_val > self.QR_MATCH_THRESHOLD:
-                        value = best_match.split("_")[0]
-                        self.process_detection(value, screenshot)
-                        print(f"Detected: {value} (Score: {best_val:.3f})")
-                    self.last_detection_time = current_time
+                ready_score = self._match_single_template(msg_frame, self.qr_ready_template)
+                locked_score = self._match_single_template(msg_frame, self.qr_locked_template)
+                if self.qr_state == "ready":
+                    if ready_score > self.QR_TRIGGER_THRESHOLD:
+                        try:
+                            screenshot = self._capture_qr_region_from_window(target_window)
+                            frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2GRAY)
+                        except Exception as e:
+                            print(f"[qr capture error] {e}")
+                            time.sleep(0.05)
+                            continue
+                        scores = self._score_all_templates(frame, self.qr_templates)
+                        best_match = scores[0][0] if scores else None
+                        best_val = scores[0][1] if scores else -1.0
+                        if best_match and best_val > self.QR_MATCH_THRESHOLD:
+                            value = best_match.split("_")[0]
+                            self.process_detection(value, screenshot)
+                            print(f"Detected: {value} (Score: {best_val:.3f})")
+                        self.qr_state = "locked"
+                        print(f"QR locked.")
+                else:
+                    if locked_score > self.QR_TRIGGER_THRESHOLD:
+                        self.qr_state = "ready"
+                        print(f"QR ready.")
             else:
                 scores = self._score_all_templates(frame, self.title_templates)
                 best_match = scores[0][0] if scores else None
