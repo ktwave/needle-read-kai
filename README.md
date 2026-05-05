@@ -1,24 +1,52 @@
-ポケットモンスターウルトラサン・ウルトラムーンの乱数調整で使えるNeedleReadの改良版です。
+ポケットモンスター ウルトラサン・ウルトラムーンの乱数調整向けに、<br>偽トロキャプチャ映像から針番号を自動判定しGen7 Main RNG Toolへ出力するツールです。
 
-偽トロキャプチャ専用です。
+## 動作環境
 
-Windows11で偽トロキャプチャを動かす設定は以下を参照ください
+- Windows 11
+- 偽トロキャプチャ環境
+- Python 3.x
 
-https://note.com/wabecch2/n/nbd2aab50d21f?sub_rt=share_pb
+Windows11での偽トロキャプチャのセットアップ例:
+[https://note.com/wabecch2/n/nbd2aab50d21f?sub_rt=share_pb](https://note.com/wabecch2/n/nbd2aab50d21f?sub_rt=share_pb)
 
-従来版は画像を見て針入力を手動で行う必要がありましたが、画像から針番号を自動で識別してテキストボックスに出力します。
+## 機能概要
 
-針リストに出力のチェックをONにしていれば、監視停止時に自動で針リストテキストボックスに出力結果をペーストします。
+- タイトル画像/QR画像をテンプレートマッチングで判定
+- 直近10件の検知画像をプレビュー表示
+- 出力結果をカンマ区切り1行で保持
+- Gen7 Main​ RNG Tool への自動反映
+- タイトルモード/QRモード 切り替え
 
-3DS Viewerの設定は以下にしてください。
+## モード仕様
 
-転送モード：Light Weight Mode
+### 共通
 
-フィルター：No Filter
+- モードラジオボタン
+- 監視開始 / 監視停止
+- ステータス表示
+- 出力結果テキスト
+- 直近10件の検知画像
+- 出力結果コピー / 出力結果クリア
 
-等倍調整：dot by dot x2
+### タイトルモード
 
-上下表示：上下画面表示、上下比率50%:50%
+- 検知インターバル(秒): デフォルト 1.0
+- `監視停止時` に `停止時にGen7 Main RNG Toolへ連携` のチェックがONなら Gen7 Main RNG Tool の針リストへ自動出力
 
+### QRモード
 
-![動作イメージ](resources/readme/image1.png)
+- `監視開始` ボタンで QR針を自動認識
+- `出力` ボタンで Gen7 側の針リストへ反映
+
+## 3DS Viewer 表示設定
+
+- 転送モード: Light Weight Mode
+- フィルター: No Filter
+- 等倍調整: dot by dot x2
+- 上下表示: 上下画面表示、上下比率 50%:50%
+
+## 動作イメージ
+
+![タイトル](resources/readme/title_preview.gif)
+
+![QR](resources/readme/qr_preview.gif)
